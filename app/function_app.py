@@ -14,8 +14,15 @@ app = func.FunctionApp()
 input_queue_name = "input"
 output_queue_name = "output"
 
+# Define agent and project_client at module level
+project_client = None
+agent = None
+azure_function_tool = None
+
 # Function to initialize the agent client and the tools Azure Functions that the agent can use
 def initialize_client():
+    global project_client, agent, azure_function_tool
+    
     # Create a project client using the project endpoint from local.settings.json
     project_client = AIProjectClient(
         credential=DefaultAzureCredential(),
@@ -46,20 +53,6 @@ def initialize_client():
         )
     )
 
-    # Create an agent with the Azure Function tool to get the weather
-    agent = project_client.agents.create_agent(
-        model="gpt-4.1-mini",
-        name="azure-function-agent-get-weather",
-        instructions="You are a helpful support agent. Answer the user's questions to the best of your ability.",
-        tools=azure_function_tool.definitions,
-    )
-    logging.info(f"Created agent, agent ID: {agent.id}")
-
-    # Create a thread
-    thread = project_client.agents.threads.create()
-    logging.info(f"Created thread, thread ID: {thread.id}")
-
-    return project_client, thread, agent
 
 @app.route(route="prompt", auth_level=func.AuthLevel.FUNCTION)
 def prompt(req: func.HttpRequest) -> func.HttpResponse:
@@ -69,19 +62,30 @@ def prompt(req: func.HttpRequest) -> func.HttpResponse:
     req_body = req.get_json()
     prompt = req_body.get('Prompt')
 
-    # Initialize the agent client
-    project_client, thread, agent = initialize_client()
-
-    # Send the prompt to the agent
+    # Create an agent with the Azure Function tool to get the weather
+    agent = project_client.agents.create_agent(
+        model="gpt-4.1-mini",
+        name="azure-function-agent-get-weather",
+        instructions="You are a helpful support agent. Answer the user's questions to the best of your ability.",
+        tools=azure_function_tool.definitions,
+    )
+    logging.info(f"Created agent, agent ID: {agent.id}")
+    
+    # Create a thread
+    thread = project_client.agents.threads.create()
+    logging.info(f"Created thread, thread ID: {thread.id}")
+    
+        # Send the prompt to the agent
     message = project_client.agents.messages.create(
         thread_id=thread.id,
         role="user",
         content=prompt,
     )
     logging.info(f"Created message, message ID: {message.id}")
-
+    
     # Run the agent
     run = project_client.agents.runs.create(thread_id=thread.id, agent_id=agent.id)
+    
     # Monitor and process the run status
     while run.status in ["queued", "in_progress", "requires_action"]:
         time.sleep(1)
@@ -132,3 +136,6 @@ def process_queue_message(msg: func.QueueMessage,  outputQueueItem: func.Out[str
     outputQueueItem.set(json.dumps(result_message).encode('utf-8'))
 
     logging.info(f"Sent message to queue: {output_queue_name} with message {result_message}")
+
+# Initialize the agent client
+initialize_client()
